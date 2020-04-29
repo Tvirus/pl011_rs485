@@ -1,0 +1,112 @@
+--- a/drivers/tty/serial/amba-pl011.c
++++ b/drivers/tty/serial/amba-pl011.c
+@@ -53,7 +53,7 @@
+ #include <linux/scatterlist.h>
+ #include <linux/delay.h>
+ #include <linux/types.h>
+-#include <linux/of.h>
++#include <linux/of_gpio.h>
+ #include <linux/of_device.h>
+ #include <linux/pinctrl/consumer.h>
+ #include <linux/sizes.h>
+@@ -282,8 +282,41 @@
+ 	struct pl011_dmatx_data	dmatx;
+ 	bool			dma_probed;
+ #endif
++	int is_485_mode; //-1:未检测，0:普通串口模式，1:485模式
++	int rs485_ctrl_gpio;
++	int rs485_send_flag; //发送时io口电平高低
+ };
+ 
++
++
++//如果某个串口配置为了485模式，获得其切换方向用的gpio和发送状态电平高低，否则函数返回值是-1
++//dts中配置为 GPIO_ACTIVE_HIGH 表示发送时io是高电平
++static int get_485_config(int port, int *gpio, int *send_flag)
++{
++    int i = 0;
++    struct device_node *uart_node = NULL;
++    enum of_gpio_flags flag;
++
++    do {
++        uart_node = of_find_node_by_name(uart_node, "uart");
++        if (NULL == uart_node)
++            break;
++        if (false == of_device_is_available(uart_node))
++            continue;
++        i++;
++    } while(i <= port);
++    if (NULL == uart_node)
++        return -1;
++
++    *gpio = of_get_named_gpio_flags(uart_node, "rs485_ctrl_gpio", 0, &flag);
++    if (!gpio_is_valid(*gpio))
++        return -1;
++
++    *send_flag = (OF_GPIO_ACTIVE_LOW == flag) ? 0 : 1;
++    return 0;
++}
++
++
+ static unsigned int pl011_reg_to_offset(const struct uart_amba_port *uap,
+ 	unsigned int reg)
+ {
+@@ -1313,6 +1346,22 @@
+ 	struct uart_amba_port *uap =
+ 	    container_of(port, struct uart_amba_port, port);
+ 
++    if (1 == uap->is_485_mode)
++    {
++        int nFR = 0;
++        while (1)
++        {
++            nFR = pl011_read(uap, REG_FR);
++            if(nFR & 0x80)
++                break;
++            udelay(10);
++        }
++        udelay(150); //115200时延时150us左右较为合适，改为其他波特率时可能要调整
++
++        gpio_direction_output(uap->rs485_ctrl_gpio, !(uap->rs485_send_flag));
++    }
++
++
+ 	uap->im &= ~UART011_TXIM;
+ 	pl011_write(uap->im, uap, REG_IMSC);
+ 	pl011_dma_tx_stop(uap);
+@@ -1332,6 +1381,24 @@
+ {
+ 	struct uart_amba_port *uap =
+ 	    container_of(port, struct uart_amba_port, port);
++    char name[20] = {0};
++
++    if (0 > uap->is_485_mode)
++    {
++        if (0 > get_485_config(uap->port.line, &uap->rs485_ctrl_gpio, &uap->rs485_send_flag))
++        {
++            uap->is_485_mode = 0;
++        }
++        else
++        {
++            snprintf(name, sizeof(name), "uart%u_485_ctrl", uap->port.line);
++            if (0 == gpio_request(uap->rs485_ctrl_gpio, name))
++                uap->is_485_mode = 1;
++        }
++    }
++    if (1 == uap->is_485_mode)
++        gpio_direction_output(uap->rs485_ctrl_gpio, uap->rs485_send_flag);
++
+ 
+ 	if (!pl011_dma_tx_start(uap))
+ 		pl011_start_tx_pio(uap);
+@@ -2521,6 +2588,10 @@
+ 	uap->port.iotype = vendor->access_32b ? UPIO_MEM32 : UPIO_MEM;
+ 	uap->port.irq = dev->irq[0];
+ 	uap->port.ops = &amba_pl011_pops;
++    if (0 == portnr)
++        uap->is_485_mode = 0;
++    else
++        uap->is_485_mode = -1;
+ 
+ 	snprintf(uap->type, sizeof(uap->type), "PL011 rev%u", amba_rev(dev));
+ 
