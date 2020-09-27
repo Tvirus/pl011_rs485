@@ -35,7 +35,7 @@
 +        if (false == of_device_is_available(uart_node))
 +            continue;
 +        i++;
-+    } while(i <= port);
++    } while (i <= port);
 +    if (NULL == uart_node)
 +        return -1;
 +
@@ -51,10 +51,12 @@
  static unsigned int pl011_reg_to_offset(const struct uart_amba_port *uap,
  	unsigned int reg)
  {
-@@ -1313,6 +1346,22 @@
+@@ -1312,6 +1345,24 @@
+ {
  	struct uart_amba_port *uap =
  	    container_of(port, struct uart_amba_port, port);
- 
++    int ibrd, fbrd;
++
 +    if (1 == uap->is_485_mode)
 +    {
 +        int nFR = 0;
@@ -65,16 +67,16 @@
 +                break;
 +            udelay(10);
 +        }
-+        udelay(150); //115200时延时150us左右较为合适，改为其他波特率时可能要调整
-+
++        ibrd = pl011_read(uap, REG_IBRD);
++        fbrd = pl011_read(uap, REG_FBRD);
++        udelay((64 * ibrd + fbrd) / 5);
 +        gpio_direction_output(uap->rs485_ctrl_gpio, !(uap->rs485_send_flag));
 +    }
 +
-+
+ 
  	uap->im &= ~UART011_TXIM;
  	pl011_write(uap->im, uap, REG_IMSC);
- 	pl011_dma_tx_stop(uap);
-@@ -1332,6 +1381,24 @@
+@@ -1332,6 +1383,24 @@
  {
  	struct uart_amba_port *uap =
  	    container_of(port, struct uart_amba_port, port);
@@ -99,7 +101,7 @@
  
  	if (!pl011_dma_tx_start(uap))
  		pl011_start_tx_pio(uap);
-@@ -2521,6 +2588,10 @@
+@@ -2521,6 +2590,10 @@
  	uap->port.iotype = vendor->access_32b ? UPIO_MEM32 : UPIO_MEM;
  	uap->port.irq = dev->irq[0];
  	uap->port.ops = &amba_pl011_pops;
@@ -109,4 +111,3 @@
 +        uap->is_485_mode = -1;
  
  	snprintf(uap->type, sizeof(uap->type), "PL011 rev%u", amba_rev(dev));
- 
